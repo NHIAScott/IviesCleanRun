@@ -25,7 +25,6 @@ const LEVELS = [
     id: 1,
     name: "The Cleanroom",
     subtitle: "Pharmacy Compounding",
-    bg: "linear-gradient(180deg, #e8f4f8 0%, #d0eaf2 40%, #b8dde8 100%)",
     description: "Dodge bacteria & mold in the compounding area!",
     enemies: [
       { type: "bacteria", emoji: "🦠", speed: 2.2, size: 34, spin: true },
@@ -41,7 +40,6 @@ const LEVELS = [
     id: 2,
     name: "In Transit",
     subtitle: "Delivery Route",
-    bg: "linear-gradient(180deg, #87CEEB 0%, #B0E0E6 30%, #d4d4d4 70%, #999 100%)",
     description: "Survive the journey to the patient!",
     enemies: [
       { type: "heat", emoji: "🌡️", speed: 2.5, size: 34, spin: false },
@@ -58,7 +56,6 @@ const LEVELS = [
     id: 3,
     name: "Patient's Home",
     subtitle: "Safe Delivery",
-    bg: "linear-gradient(180deg, #FFF8E7 0%, #FFECD2 40%, #f5e1c8 100%)",
     description: "Keep Ivie safe for the patient!",
     enemies: [
       { type: "pet", emoji: "🐱", speed: 3.0, size: 36, spin: false },
@@ -72,6 +69,84 @@ const LEVELS = [
     targetScore: 400,
   },
 ];
+
+// ─── Emoji pre-rendering system ───
+// Renders each emoji once to an offscreen canvas at multiple sizes,
+// then caches as ImageBitmap/canvas for drawImage calls.
+// This normalizes rendering across iOS Safari, Chrome Android, Samsung Internet, etc.
+
+const SPRITE_SCALE = 2; // render at 2x for retina crispness
+const spriteCache = {};
+
+function prerenderAllEmojis() {
+  const allEmojis = new Set();
+  LEVELS.forEach((level) => {
+    level.enemies.forEach((e) => allEmojis.add(e.emoji));
+    allEmojis.add(level.powerup.emoji);
+  });
+
+  const sizes = [28, 30, 32, 34, 36, 40, 48]; // all sizes used in the game
+
+  allEmojis.forEach((emoji) => {
+    sizes.forEach((size) => {
+      const key = `${emoji}_${size}`;
+      const dim = size * SPRITE_SCALE;
+      const offscreen = document.createElement("canvas");
+      offscreen.width = dim;
+      offscreen.height = dim;
+      const ctx = offscreen.getContext("2d");
+
+      // Clear with transparent background
+      ctx.clearRect(0, 0, dim, dim);
+
+      // Draw emoji centered, scaled up
+      ctx.font = `${size * SPRITE_SCALE * 0.85}px serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(emoji, dim / 2, dim / 2 + dim * 0.04);
+
+      spriteCache[key] = offscreen;
+    });
+  });
+}
+
+function getSprite(emoji, size) {
+  const key = `${emoji}_${size}`;
+  if (spriteCache[key]) return spriteCache[key];
+
+  // Fallback: find closest cached size
+  const sizes = [28, 30, 32, 34, 36, 40, 48];
+  let closest = sizes[0];
+  let closestDiff = Math.abs(size - closest);
+  for (const s of sizes) {
+    const diff = Math.abs(size - s);
+    if (diff < closestDiff) { closest = s; closestDiff = diff; }
+  }
+  const fallbackKey = `${emoji}_${closest}`;
+  if (spriteCache[fallbackKey]) return spriteCache[fallbackKey];
+
+  // Emergency fallback: render on the fly
+  const dim = size * SPRITE_SCALE;
+  const offscreen = document.createElement("canvas");
+  offscreen.width = dim;
+  offscreen.height = dim;
+  const ctx = offscreen.getContext("2d");
+  ctx.clearRect(0, 0, dim, dim);
+  ctx.font = `${size * SPRITE_SCALE * 0.85}px serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(emoji, dim / 2, dim / 2 + dim * 0.04);
+  spriteCache[key] = offscreen;
+  return offscreen;
+}
+
+function drawSpriteEmoji(ctx, emoji, x, y, size) {
+  const sprite = getSprite(emoji, size);
+  const dim = size;
+  ctx.drawImage(sprite, 0, 0, sprite.width, sprite.height, x, y, dim, dim);
+}
+
+// ─── Drawing functions ───
 
 function drawIvie(ctx, x, y, size, shieldActive, frame) {
   const s = size;
@@ -202,14 +277,13 @@ function drawEnemy(ctx, enemy, frame) {
     ctx.rotate(frame * 0.04);
     ctx.translate(-cx, -cy);
   }
+  // Shadow
   ctx.beginPath();
   ctx.ellipse(cx, enemy.y + enemy.size + 2, enemy.size * 0.35, 4, 0, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(0,0,0,0.1)";
   ctx.fill();
-  ctx.font = `${enemy.size}px serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(enemy.emoji, cx, cy);
+  // Pre-rendered sprite instead of fillText
+  drawSpriteEmoji(ctx, enemy.emoji, enemy.x, enemy.y, enemy.size);
   ctx.restore();
 }
 
@@ -218,6 +292,7 @@ function drawPowerup(ctx, p, frame) {
   const cx = p.x + POWERUP_SIZE / 2;
   const cy = p.y + POWERUP_SIZE / 2;
   const pulse = 1 + Math.sin(frame * 0.1) * 0.1;
+  // Glow
   ctx.beginPath();
   ctx.arc(cx, cy, POWERUP_SIZE * 0.7 * pulse, 0, Math.PI * 2);
   const glow = ctx.createRadialGradient(cx, cy, 2, cx, cy, POWERUP_SIZE * 0.7);
@@ -225,10 +300,10 @@ function drawPowerup(ctx, p, frame) {
   glow.addColorStop(1, "rgba(255,215,0,0)");
   ctx.fillStyle = glow;
   ctx.fill();
-  ctx.font = `${POWERUP_SIZE * pulse}px serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(p.emoji, cx, cy);
+  // Pre-rendered sprite with pulse scale
+  const scaledSize = POWERUP_SIZE * pulse;
+  const offset = (scaledSize - POWERUP_SIZE) / 2;
+  drawSpriteEmoji(ctx, p.emoji, p.x - offset, p.y - offset, Math.round(scaledSize));
   ctx.restore();
 }
 
@@ -291,7 +366,6 @@ function drawParticles(ctx, particles) {
   });
 }
 
-// Simple seeded RNG for per-run obstacle density variation
 function createRNG(seed) {
   let s = seed;
   return function () {
@@ -302,7 +376,7 @@ function createRNG(seed) {
 
 export default function IviesCleanRun() {
   const canvasRef = useRef(null);
-  const [gameState, setGameState] = useState("menu");
+  const [gameState, setGameState] = useState("loading"); // loading -> menu -> ...
   const [currentLevel, setCurrentLevel] = useState(0);
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(3);
@@ -346,6 +420,14 @@ export default function IviesCleanRun() {
   const containerRef = useRef(null);
   const scaleRef = useRef(1);
 
+  // Pre-render all emoji sprites on mount
+  useEffect(() => {
+    prerenderAllEmojis();
+    // Small delay to ensure canvases are composited
+    const timer = setTimeout(() => setGameState("menu"), 150);
+    return () => clearTimeout(timer);
+  }, []);
+
   useEffect(() => {
     function resize() {
       if (containerRef.current) {
@@ -370,7 +452,6 @@ export default function IviesCleanRun() {
     const level = LEVELS[g.level];
     const template = level.enemies[Math.floor(g.rng() * level.enemies.length)];
     const speedMult = 1 + g.levelScore / 800;
-    // ~18% chance to spawn a pair for density variation
     const doubleSpawn = g.rng() > 0.82;
     const count = doubleSpawn ? 2 : 1;
     for (let i = 0; i < count; i++) {
@@ -483,20 +564,17 @@ export default function IviesCleanRun() {
       g.frame++;
       const level = LEVELS[g.level];
 
-      // Spawn enemies with randomized intervals
       if (g.frame - g.lastSpawn > g.nextSpawnInterval) {
         spawnEnemy(g);
         g.lastSpawn = g.frame;
         g.nextSpawnInterval = getRandomizedSpawnInterval(g);
       }
 
-      // Spawn powerups
       if (g.frame - g.lastPowerup > 600) {
         spawnPowerup(g);
         g.lastPowerup = g.frame;
       }
 
-      // Score increment with combo multiplier
       if (g.frame % 6 === 0) {
         const tier = getComboMultiplier(g.combo);
         g.score += tier.multiplier;
@@ -506,10 +584,8 @@ export default function IviesCleanRun() {
         setLevelProgress(Math.min(g.levelScore / level.targetScore, 1));
       }
 
-      // Combo popup timer
       if (g.comboPopup && g.comboPopup.timer > 0) g.comboPopup.timer--;
 
-      // Shield/freeze timers
       if (g.shield > 0) g.shield--;
       if (g.freeze > 0) g.freeze--;
       setDisplayShield(g.shield > 0);
@@ -517,7 +593,6 @@ export default function IviesCleanRun() {
       if (g.hitFlash > 0) g.hitFlash--;
       if (g.screenShake > 0) g.screenShake--;
 
-      // Move enemies
       const freezeMult = g.freeze > 0 ? 0.2 : 1;
       g.enemies.forEach((e) => {
         e.y += e.speed * freezeMult;
@@ -537,10 +612,8 @@ export default function IviesCleanRun() {
         w: IVIE_SIZE - 16, h: IVIE_SIZE - 16,
       };
 
-      // Enemy collisions
       g.enemies = g.enemies.filter((e) => {
         if (e.y > GAME_HEIGHT + 20) {
-          // Successfully dodged — increment streak
           g.combo++;
           g.totalDodged++;
           if (g.combo > g.bestCombo) g.bestCombo = g.combo;
@@ -564,7 +637,6 @@ export default function IviesCleanRun() {
             checkComboThreshold(g);
             return false;
           }
-          // HIT — streak broken
           g.lives--;
           g.hitFlash = 15;
           g.screenShake = 10;
@@ -583,7 +655,6 @@ export default function IviesCleanRun() {
         return true;
       });
 
-      // Powerup collisions
       g.powerups = g.powerups.filter((p) => {
         if (p.y > GAME_HEIGHT + 20) return false;
         const pBox = { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE };
@@ -618,7 +689,6 @@ export default function IviesCleanRun() {
         return true;
       });
 
-      // Level completion
       if (g.levelScore >= level.targetScore) {
         if (g.level < LEVELS.length - 1) {
           startLevel(g.level + 1);
@@ -669,7 +739,6 @@ export default function IviesCleanRun() {
       drawParticles(ctx, g.particles);
       drawIvie(ctx, g.ivie.x, g.ivie.y, IVIE_SIZE, g.shield > 0, g.frame);
 
-      // Combo popup on canvas
       if (g.comboPopup && g.comboPopup.timer > 0) {
         const alpha = Math.min(g.comboPopup.timer / 30, 1);
         const yOff = (120 - g.comboPopup.timer) * 0.3;
@@ -762,7 +831,23 @@ export default function IviesCleanRun() {
         @keyframes barFill { from { width: 0%; } }
         @keyframes victoryPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
         @keyframes comboFlash { 0% { opacity: 0; transform: translateY(10px) scale(0.8); } 20% { opacity: 1; transform: translateY(0) scale(1.1); } 40% { transform: scale(1); } 100% { opacity: 0; transform: translateY(-20px); } }
+        @keyframes spinLoad { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
+
+      {/* LOADING (while sprites pre-render) */}
+      {gameState === "loading" && (
+        <div style={{
+          width: "100%", height: "100vh", display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center",
+          background: "linear-gradient(180deg, #0B1D3A 0%, #0F2847 50%, #29ABE2 100%)",
+        }}>
+          <div style={{
+            width: 40, height: 40, border: "3px solid rgba(255,255,255,0.1)",
+            borderTopColor: "#29ABE2", borderRadius: "50%", animation: "spinLoad 0.8s linear infinite",
+          }} />
+          <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 13, marginTop: 16 }}>Loading sprites...</p>
+        </div>
+      )}
 
       {/* MENU */}
       {gameState === "menu" && (
@@ -803,7 +888,6 @@ export default function IviesCleanRun() {
               Guide Ivie through 3 stages of the home infusion journey. Dodge contaminants, build combos, and deliver safe care!
             </p>
 
-            {/* Combo legend */}
             <div style={{
               margin: "20px auto 0", maxWidth: 280, background: "rgba(255,255,255,0.04)",
               border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: "12px 16px",
@@ -852,7 +936,11 @@ export default function IviesCleanRun() {
       {gameState === "levelIntro" && (
         <div style={{
           width: "100%", height: "100vh", display: "flex", flexDirection: "column",
-          alignItems: "center", justifyContent: "center", background: levelData.bg, animation: "levelIn 0.5s ease-out",
+          alignItems: "center", justifyContent: "center",
+          background: levelData.id === 1 ? "linear-gradient(180deg, #e8f4f8 0%, #d0eaf2 40%, #b8dde8 100%)" :
+            levelData.id === 2 ? "linear-gradient(180deg, #87CEEB 0%, #B0E0E6 30%, #d4d4d4 70%, #999 100%)" :
+            "linear-gradient(180deg, #FFF8E7 0%, #FFECD2 40%, #f5e1c8 100%)",
+          animation: "levelIn 0.5s ease-out",
         }}>
           <div style={{
             background: "rgba(255,255,255,0.9)", borderRadius: 24, padding: "32px 40px",
@@ -891,7 +979,6 @@ export default function IviesCleanRun() {
       {/* PLAYING */}
       {gameState === "playing" && (
         <div style={{ position: "relative", width: "100%", maxWidth: GAME_WIDTH }}>
-          {/* HUD */}
           <div style={{
             position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, padding: "10px 16px 6px",
             background: "linear-gradient(180deg, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0) 100%)",
@@ -925,7 +1012,6 @@ export default function IviesCleanRun() {
             </div>
           </div>
 
-          {/* Progress bar */}
           <div style={{
             position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10,
             height: 4, background: "rgba(0,0,0,0.15)", pointerEvents: "none",
@@ -999,9 +1085,7 @@ export default function IviesCleanRun() {
               marginBottom: 12, border: "1px solid rgba(255,255,255,0.1)",
             }}>
               <div style={{ fontSize: 40, fontWeight: 800, color: "#29ABE2", fontVariantNumeric: "tabular-nums" }}>{score}</div>
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "2px", marginTop: 4 }}>
-                Final Score
-              </div>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "2px", marginTop: 4 }}>Final Score</div>
               {score >= highScore && score > 0 && (
                 <div style={{ fontSize: 12, color: "#FFD700", fontWeight: 700, marginTop: 8 }}>✨ NEW HIGH SCORE ✨</div>
               )}
